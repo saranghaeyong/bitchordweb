@@ -20,6 +20,43 @@ interface SearchViewProps {
   onOpenAddToPlaylist: (track: Track) => void;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const mapYtMusicTrack = (value: unknown): Track | null => {
+  if (!isRecord(value) || typeof value.id !== 'string' || !value.id.trim()) {
+    return null;
+  }
+
+  const channelTitle = typeof value.channelTitle === 'string' && value.channelTitle.trim()
+    ? value.channelTitle
+    : undefined;
+  const artist = typeof value.artist === 'string' && value.artist.trim()
+    ? value.artist
+    : channelTitle || 'Unknown Artist';
+
+  return {
+    id: value.id.trim(),
+    title: typeof value.title === 'string' && value.title.trim()
+      ? value.title
+      : 'Unknown Title',
+    artist,
+    ...(channelTitle ? { channelTitle } : {}),
+    thumbnailUrl: typeof value.thumbnailUrl === 'string' ? value.thumbnailUrl : '',
+    ...(typeof value.duration === 'number' && Number.isFinite(value.duration)
+      ? { duration: value.duration }
+      : {}),
+    ...(typeof value.durationFormatted === 'string'
+      ? { durationFormatted: value.durationFormatted }
+      : {}),
+    ...(typeof value.views === 'string'
+      ? { views: value.views }
+      : typeof value.views === 'number' && Number.isFinite(value.views)
+        ? { views: String(value.views) }
+        : {}),
+  };
+};
+
 export const SearchView: React.FC<SearchViewProps> = ({
   initialQuery = '',
   onOpenAddToPlaylist,
@@ -38,8 +75,6 @@ export const SearchView: React.FC<SearchViewProps> = ({
   const [results, setResults] = useState<Track[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [noticeMsg, setNoticeMsg] = useState<string | null>(null);
-  const [nextPageToken, setNextPageToken] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [addedNotice, setAddedNotice] = useState<string | null>(null);
 
@@ -55,35 +90,36 @@ export const SearchView: React.FC<SearchViewProps> = ({
     'Acoustic Guitar Warmth',
   ];
 
-  const executeSearch = async (searchTerm: string, pageToken?: string) => {
+  const executeSearch = async (searchTerm: string) => {
     if (!searchTerm.trim()) return;
     setIsLoading(true);
     setErrorMsg(null);
-    setNoticeMsg(null);
 
     try {
-      const url = new URL('/api/youtube/search', window.location.origin);
+      const url = new URL('/api/ytmusic/search', window.location.origin);
       url.searchParams.set('q', searchTerm);
-      if (pageToken) url.searchParams.set('pageToken', pageToken);
+      url.searchParams.set('limit', '20');
 
       const res = await fetch(url.toString());
-      const data = await res.json();
+      const data: unknown = await res.json();
 
-      if (res.ok && data.items) {
-        if (pageToken) {
-          setResults(prev => [...prev, ...data.items]);
-        } else {
-          setResults(data.items);
-        }
-        setNextPageToken(data.nextPageToken || null);
-        if (data.notice) {
-          setNoticeMsg(data.notice);
-        }
-      } else {
-        setErrorMsg(data.message || 'Failed to retrieve search results');
+      if (!res.ok) {
+        setErrorMsg(
+          isRecord(data) && typeof data.error === 'string'
+            ? data.error
+            : 'Failed to retrieve search results',
+        );
+        return;
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Network error while searching');
+
+      if (!isRecord(data) || !Array.isArray(data.items)) {
+        setErrorMsg('Search service returned an invalid response');
+        return;
+      }
+
+      setResults(data.items.map(mapYtMusicTrack).filter((track): track is Track => track !== null));
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Network error while searching');
     } finally {
       setIsLoading(false);
       setHasSearched(true);
@@ -161,14 +197,6 @@ export const SearchView: React.FC<SearchViewProps> = ({
         <div className="fixed top-20 right-8 z-50 px-4 py-2 rounded-xl bg-purple-600 text-white text-xs font-medium shadow-xl flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
           <Check size={14} />
           <span>{addedNotice}</span>
-        </div>
-      )}
-
-      {/* Notices & Fallback Messages */}
-      {noticeMsg && (
-        <div className="p-4 rounded-2xl bg-amber-950/20 border border-amber-500/30 text-amber-200 text-xs flex items-center gap-3">
-          <AlertCircle size={18} className="shrink-0 text-amber-400" />
-          <p>{noticeMsg}</p>
         </div>
       )}
 
@@ -299,18 +327,6 @@ export const SearchView: React.FC<SearchViewProps> = ({
             })}
           </div>
 
-          {/* Load More Button */}
-          {nextPageToken && (
-            <div className="text-center pt-4">
-              <button
-                onClick={() => executeSearch(query, nextPageToken)}
-                disabled={isLoading}
-                className="px-6 py-2.5 rounded-full bg-white/10 hover:bg-white/15 text-white text-xs font-semibold transition-colors"
-              >
-                {isLoading ? 'Loading More...' : 'Load More Results'}
-              </button>
-            </div>
-          )}
         </div>
       )}
 

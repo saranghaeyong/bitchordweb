@@ -1,4 +1,8 @@
 import express, { Request, Response } from 'express';
+import { execFile } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { promisify } from 'node:util';
+
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -6,6 +10,8 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 
 dotenv.config();
+const execFileAsync = promisify(execFile);
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -401,6 +407,41 @@ async function startServer() {
       isFallback: true,
       notice: apiKey ? 'YouTube API quota reached or limited. Showing curated catalogue.' : 'Operating in demo mode without YouTube API key.',
     });
+  });
+
+
+  // YTMUSIC_API_ROUTE: YouTube Music search via ytmusicapi
+  app.get('/api/ytmusic/search', async (req: Request, res: Response) => {
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+
+    if (!query) {
+      return res.status(400).json({ error: 'Provide a search query using ?q=' });
+    }
+
+    const rawLimit = Number.parseInt(String(req.query.limit || '10'), 10);
+    const limit = Number.isFinite(rawLimit)
+      ? Math.max(1, Math.min(rawLimit, 20))
+      : 10;
+
+    const localPython = path.join(__dirname, '.venv', 'bin', 'python');
+    const pythonBin = process.env.YTMUSIC_PYTHON ||
+      (existsSync(localPython) ? localPython : 'python3');
+    const scriptPath = path.join(__dirname, 'scripts', 'ytmusic_search.py');
+
+    try {
+      const { stdout } = await execFileAsync(
+        pythonBin,
+        [scriptPath, query, String(limit)],
+        { timeout: 20000, maxBuffer: 2 * 1024 * 1024 }
+      );
+
+      return res.json(JSON.parse(stdout));
+    } catch (error) {
+      console.error('ytmusicapi search failed:', error);
+      return res.status(502).json({
+        error: 'YouTube Music search failed. Check Python installation and server logs.',
+      });
+    }
   });
 
   // Trending music endpoint
